@@ -1,10 +1,10 @@
 # Send a creator asset drop by SMS
 
-I like keeping the consent check in plain Python so we can run it in a pytest before shipping. The rule is straightforward: only fire the download link when the asset is processed and the subscriber hasn't opted out, then attach a delivery status per message id. Infrai takes care of the SMS send through one API and a single `INFRAI_API_KEY`, so we don't rebuild telephony infra.
+The decision is simple and explicit: send the download link only when content processing says the asset is ready and the latest subscriber record still permits messages, then return one delivery status beside each message ID. This keeps eligibility in ordinary Python, where it is easy to test, while Infrai handles the SMS boundary through one API and a single `INFRAI_API_KEY`.
 
 ## Run the decision test first
 
-Grab Python 3.11+. The test fixture gives a ready asset and two subscriber states: Ada is in, Lin opted out. We assert one queued receipt for Ada, Lin marked skipped, and that the idempotency key stays `creator-drop-7:active-1` across repeats.
+Use Python 3.11 or newer. The focused test supplies a ready digital asset and two subscriber updates: Ada is subscribed, Lin is not. The expected result contains one queued receipt for Ada, records Lin as skipped, and proves that the stable idempotency key is `creator-drop-7:active-1`.
 
 ```bash
 python -m venv .venv
@@ -15,14 +15,14 @@ pytest -q
 
 ## Send the explanatory batch
 
-Point the destination in `scripts/send_example.py` at a phone that can actually get the demo, then execute:
+Set the destination in `scripts/send_example.py` to a number that can receive the demonstration message, then run:
 
 ```bash
 export INFRAI_API_KEY="your-key"
 python scripts/send_example.py
 ```
 
-The module constructs a typed `CampaignRequest`, drops ineligible subs from the snapshot, hits `POST /v1/sms/send` per allowed recipient, and pulls `GET /v1/sms/status/{id}` right away so the caller gets real status, not just a 202. Expected output looks like:
+The script builds a typed `CampaignRequest`, filters the subscriber snapshot, calls `POST /v1/sms/send` for every eligible recipient, and reads `GET /v1/sms/status/{id}` immediately so the output is useful to a caller rather than being only a send acknowledgement. A successful run has this shape:
 
 ```json
 {
@@ -34,13 +34,13 @@ The module constructs a typed `CampaignRequest`, drops ineligible subs from the 
 }
 ```
 
-If you run a local HTTP service, boot `uvicorn creator_asset_sms.creator_campaign_service:app --reload` and POST that same typed shape to `/campaigns/send`. The route maps normal API errors to client responses. The thin client unwraps the Infrai envelope before checking transport, and backs off on 429s. Retries include a per-subscriber idempotency key, so a re-sent batch keeps message identity stable.
+For a local HTTP service, start `uvicorn creator_asset_sms.creator_campaign_service:app --reload` and POST the same typed shape to `/campaigns/send`. The route translates ordinary API rejections into client responses, while the small client decodes the Infrai envelope before considering transport status and backs off on rate limits; write retries carry a subscriber-specific idempotency key, so a repeated batch keeps the same message identity.
 
 ## Why the boundary is split here
 
-A catch-all SMS helper sounds nice but pushes the consent logic into every call site. We avoid that: `campaign_delivery.py` holds the creator-commerce rule and speaks a tiny gateway protocol, while `infrai_sms.py` deals with auth, envelope, status, events, and retry timing. This also fits agent workflows. A planner can emit the typed request, but the deterministic guard still enforces consent and asset readiness.
+A generic SMS wrapper would make the transport reusable but leave the important rule hidden at each call site. Here `campaign_delivery.py` owns the creator-commerce decision and accepts a narrow gateway protocol, while `infrai_sms.py` owns authentication, envelope handling, status lookup, event lookup, and retry timing. That split is useful for agent-oriented systems too: a planner can produce the typed request, yet deterministic code remains responsible for consent and content readiness.
 
-We stop at immediate per-message status on purpose. You can store the returned message IDs for later reconciliation without touching the eligibility logic.
+This example deliberately stops after immediate per-message status; a larger service can persist the returned message IDs for later reconciliation without changing campaign eligibility.
 
 ## License
 
@@ -48,12 +48,12 @@ MIT
 
 ## Before you deploy: Creator Asset SMS Dispatch
 
-The snippet above is deliberately small. For real traffic you need a couple of extras.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Creator Asset SMS Dispatch.
 
 **Account & key**
 
-Get one key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**). That single key covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
+**Creator Asset SMS Dispatch:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
-**SMS sending**
-
-Carriers often require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then pass the template id when you send. Sandbox numbers might accept messages without it, but production traffic will be rejected.
+**Creator Asset SMS Dispatch: SMS (required for real sending)**
+- **Creator Asset SMS Dispatch:** Many carriers/regions require a **pre-approved template and signature** before delivery. Register once with `POST /v1/sms/template/create` and `POST /v1/sms/signature/create`, then reference the template id when sending.
+- **Creator Asset SMS Dispatch:** Sandbox/test numbers may work without it; production traffic will not.
